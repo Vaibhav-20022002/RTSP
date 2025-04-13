@@ -17,6 +17,9 @@ import (
 
 	"github.com/bluenviron/gortsplib/v4"
 	"github.com/bluenviron/gortsplib/v4/pkg/base"
+	"github.com/bluenviron/gortsplib/v4/pkg/description"
+	"github.com/bluenviron/gortsplib/v4/pkg/format"
+	"github.com/pion/rtp"
 )
 
 func main() {
@@ -27,7 +30,7 @@ func main() {
 
 	// Parsing RTSP URL :
 	rtspURL := os.Args[1]
-	url, err := base.ParseURL(rtspURL)
+	parsedURL, err := base.ParseURL(rtspURL)
 	if err != nil {
 		log.Fatalf("Cannot parse RTSP URL : %v", err)
 	}
@@ -46,7 +49,7 @@ func main() {
 	// Step 0: CONNECT to the RTSP Server
 	// ---------------------------------
 	// The client.Start method connects to the RTSP server.
-	err = client.Start(url.Scheme, url.Host)
+	err = client.Start(parsedURL.Scheme, parsedURL.Host)
 	if err != nil {
 		log.Fatalf("Error connecting to server: %v", err)
 	}
@@ -57,7 +60,7 @@ func main() {
 	// Step 1: DESCRIBE Request
 	// ----------------------------
 	// The DESCRIBE request retrieves the session description (SDP) and media tracks.
-	desc, _, err := client.Describe(url)
+	desc, _, err := client.Describe(parsedURL)
 	if err != nil {
 		log.Fatalf("Error during DESCRIBE: %v", err)
 	}
@@ -70,4 +73,54 @@ func main() {
 		log.Println("SDP in JSON:")
 		log.Println(string(descJSON))
 	}
+
+	// ----------------------------
+	// Step 2: SETUP Media
+	// ----------------------------
+	// Setup all medias :
+	err = client.SetupAll(desc.BaseURL, desc.Medias)
+	if err != nil {
+		log.Printf("Error setting up medias: %v", err)
+	}
+
+	// ---------------------------------------
+	// Step 3: Register RTP Packet Callback
+	// ---------------------------------------
+	// The OnPacketRTP callback is called whenever an RTP packet is received :
+	client.OnPacketRTPAny(func(medi *description.Media, forma format.Format, pkt *rtp.Packet) {
+		packetInfo := map[string]any{
+			"version":           pkt.Version,
+			"sequence_number":   pkt.SequenceNumber,
+			"timestamp":         pkt.Timestamp,
+			"extension":         pkt.Extension,
+			"padding":           pkt.Padding,
+			"marker":            pkt.Marker,
+			"payload_type":      pkt.PayloadType,
+			"ssrc":              pkt.SSRC,
+			"csrc":              pkt.CSRC,
+			"extensions":        pkt.Extensions,
+			"extension_profile": pkt.ExtensionProfile,
+		}
+
+		packetJSON, err := json.MarshalIndent(packetInfo, "", "  ")
+		if err != nil {
+			log.Printf("Error marshaling RTP packet to JSON: %v", err)
+			return
+		}
+		log.Println("Received RTP packet:")
+		log.Println(string(packetJSON))
+	})
+
+	// -----------------------------------
+	// Step 4: Start the RTSP stream
+	// -----------------------------------
+	// Start playing to trigger the OnPacketRTPAny callback function :
+	_, err = client.Play(nil)
+	if err != nil {
+		log.Printf("Error during PLAY: %v\n", err)
+	}
+
+	// Run for infinity until explicit exit :
+	log.Println("Streaming... Press Ctrl+C to exit.")
+	select {}
 }
